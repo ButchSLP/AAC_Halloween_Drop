@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>AAC Halloween Drop — Spooky Upload Edition</title>
+<title>AAC Halloween Drop — Spooky Edition</title>
 
 <!-- Cartoon font -->
 <link href="https://fonts.googleapis.com/css2?family=Bangers&display=swap" rel="stylesheet">
@@ -11,15 +11,15 @@
 <!--
   AAC Halloween Drop — Spooky Upload Edition
   --------------------------------------------------
-  Required files to place in same folder as this HTML:
-  Images:
+  Required files - place these in subfolders next to this HTML file:
+  Images (in an images/ folder):
     - spooky1.png ... spooky14.png  (fallback default Halloween drop images)
     - witch.png                      (flying witch / spooky flyer image)
-    - spiderweb.png                  (spiderweb / chute image)
-    - witch_avatar.png              (player 1 avatar - pumpkin / witch)
+    - spider.png                  (spider / chute image)
+    - cat_avatar.png              (player 1 avatar - pumpkin / cat)
     - ghost_avatar.png              (player 2 avatar - ghost / monster)
 
-  Audio:
+  Audio (in a sounds/ folder):
     - spooky_bg.mp3                  (background music)
     - click.mp3
     - drop.mp3
@@ -76,6 +76,11 @@
   /* Winner banner */
   #winnerBanner{ position:absolute; left:50%; top:16%; transform:translate(-50%,-50%); z-index:85; padding:12px 28px; border-radius:18px; font-size:36px; font-weight:900; color:white; display:none; text-shadow:0 8px 20px rgba(0,0,0,0.8); border:3px solid #00ff66; }
 
+  /* Round toast ("Name found it!") */
+  #roundToast{ position:absolute; left:50%; top:27%; transform:translateX(-50%); z-index:84; padding:10px 28px; border-radius:16px;
+               font-family:'Bangers', cursive; font-size:36px; letter-spacing:1px; color:#fff; display:none; pointer-events:none;
+               border:3px solid rgba(255,255,255,0.85); text-shadow:0 3px 6px #000; white-space:nowrap; }
+
   /* overlays (start & play again) */
   .overlay {
     position:absolute; left:0; top:0; width:100%; height:100%; background:rgba(10,5,20,0.85); z-index:200;
@@ -109,7 +114,7 @@
   #nextBtn{
     position:absolute;
     left:50%;
-    top:60%;
+    top:54%;
     transform:translate(-50%,-50%);
     z-index:90;
     padding:26px 58px;
@@ -144,14 +149,14 @@
 <div id="topBar">
   <div id="leftScore" class="score-side" style="pointer-events:auto;">
     <div id="p1" class="score-box" role="button" aria-pressed="false">
-      <span class="avatar" id="p1avatar"><img src="images/witch_avatar.png" alt="P1 avatar" /></span>
+      <span class="avatar" id="p1avatar"><img src="images/cat_avatar.png" alt="P1 avatar" /></span>
       <span class="nameSpan" id="p1name">Pumpkin 1</span>
       <span class="scoreSpan" id="p1score">0</span>
     </div>
   </div>
 
   <div id="titleWrap">
-    <h1 id="title">🎃 AAC Spooky Drop 👻</h1>
+    <h1 id="title">🎃 AAC Spooky Drop</h1>
   </div>
 
   <div id="rightScore" class="score-side" style="pointer-events:auto;">
@@ -165,6 +170,9 @@
 
 <!-- Winner banner -->
 <div id="winnerBanner"></div>
+
+<!-- Round toast -->
+<div id="roundToast" aria-live="polite"></div>
 
 <!-- Next Drop button -->
 <button id="nextBtn">🎃 Next Drop 🦇</button>
@@ -219,32 +227,49 @@ const DEFAULT_DROP_FILENAMES = [
   'images/spooky8.png','images/spooky9.png','images/spooky10.png','images/spooky11.png','images/spooky12.png','images/spooky13.png','images/spooky14.png'
 ];
 const FLYER_SRC = "images/witch.png";          // Replaces airplane (Witch on broomstick)
-const CARRIER_SRC = "images/spiderweb.png";    // Replaces parachute (Spiderweb / Chute)
+const CARRIER_SRC = "images/spider.png";    // Replaces parachute (Spider / Chute)
 const MAX_UPLOADS = 30;
 const ALLOWED_TYPES = ['image/png','image/jpeg'];
 
 /* Spooky visual constants */
 const PLAYER1_COLOR = getComputedStyle(document.documentElement).getPropertyValue('--p1').trim() || '#ff6600';
 const PLAYER2_COLOR = getComputedStyle(document.documentElement).getPropertyValue('--p2').trim() || '#00ff66';
-const FALL_SIZE = 130;
+const BASE_FALL_SIZE = 130;
+const FALL_SPEED_SCALE = 1;      // 1 = original fall speed; lower it (e.g. 0.7) for a slower, longer fall
+let FALL_SIZE = BASE_FALL_SIZE;  // symbol card size, scales with screen height (see computeFallSize)
+function computeFallSize(){
+  return Math.round(Math.max(BASE_FALL_SIZE, Math.min(canvas.height * 0.22, 240)));
+}
 
 /* -------- CANVAS -------- */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-function resizeCanvas(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+function resizeCanvas(){ canvas.width = window.innerWidth; canvas.height = window.innerHeight; FALL_SIZE = computeFallSize(); }
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
 /* -------- IMAGE LOADING -------- */
-let defaultDropImgs = DEFAULT_DROP_FILENAMES.map(fn => { const img = new Image(); img.src = fn; return img; });
+let defaultDropImgs = DEFAULT_DROP_FILENAMES.map(fn => {
+  const img = new Image();
+  img.onerror = () => console.warn('Missing drop image (skipped):', fn);
+  img.src = fn;
+  return img;
+});
+
+// True only for images that finished loading and are not broken
+function imgReady(img){ return !!img && img.complete && img.naturalWidth > 0; }
 let uploadedImgs = [];
 
 function getActiveDropPool(){
-  return uploadedImgs.length > 0 ? uploadedImgs.map(o => o.img) : defaultDropImgs;
+  const src = uploadedImgs.length > 0 ? uploadedImgs.map(o => o.img) : defaultDropImgs;
+  const ready = src.filter(imgReady);
+  // If every upload failed to load, fall back to the defaults that did load
+  if(ready.length === 0 && uploadedImgs.length > 0) return defaultDropImgs.filter(imgReady);
+  return ready;
 }
 
-const planeImg = new Image(); planeImg.src = FLYER_SRC;
-const parachuteImg = new Image(); parachuteImg.src = CARRIER_SRC;
+const planeImg = new Image(); planeImg.onerror = () => console.warn('Missing image:', FLYER_SRC); planeImg.src = FLYER_SRC;
+const parachuteImg = new Image(); parachuteImg.onerror = () => console.warn('Missing image:', CARRIER_SRC); parachuteImg.src = CARRIER_SRC;
 
 /* -------- AUDIO -------- */
 const bgAudio = document.getElementById('bgAudio'); bgAudio.volume = 0.15; // Low volume for spooky ambience
@@ -263,6 +288,9 @@ let activeDrop = null;
 let isRunning = false;
 let gameOver = false;
 let score1 = 0, score2 = 0;
+let roundOpen = false;      // true while the current drop can still be claimed
+let frameStep = 1;          // elapsed time in 60fps-frames; keeps speed the same on any refresh rate
+let lastFrameTime = null;
 let playerName1 = "Pumpkin 1", playerName2 = "Ghost 2";
 
 /* DOM refs */
@@ -280,6 +308,7 @@ const fileInput = document.getElementById('fileInput');
 const uploadInfo = document.getElementById('uploadInfo');
 const winnerBanner = document.getElementById('winnerBanner');
 const nextBtn = document.getElementById('nextBtn');
+const roundToast = document.getElementById('roundToast');
 const playAgainOverlay = document.getElementById('playAgainOverlay');
 const playYes = document.getElementById('playYes');
 const playNo = document.getElementById('playNo');
@@ -408,10 +437,10 @@ function createFireworkBurst(x,y,amount=100){
 function drawFireworks(){
   for(let i=fireworksParticles.length-1;i>=0;i--){
     const p = fireworksParticles[i];
-    p.x += Math.cos(p.angle)*p.speed;
-    p.y += Math.sin(p.angle)*p.speed + 0.12*(1 - p.life/360);
-    p.speed *= 0.995;
-    p.life--;
+    p.x += Math.cos(p.angle)*p.speed*frameStep;
+    p.y += (Math.sin(p.angle)*p.speed + 0.12*(1 - p.life/360))*frameStep;
+    p.speed *= Math.pow(0.995, frameStep);
+    p.life -= frameStep;
     ctx.globalAlpha = Math.max(p.life/240, 0);
     ctx.fillStyle = p.color;
     ctx.shadowColor = p.color;
@@ -452,7 +481,7 @@ function drawCloud(c){
 }
 function updateClouds(){ 
   for(const c of clouds){ 
-    c.x += c.vx; 
+    c.x += c.vx * frameStep; 
     if(c.x - c.w > canvas.width) c.x = -50; 
     if(c.x + c.w < 0) c.x = canvas.width + 50; 
   } 
@@ -460,7 +489,7 @@ function updateClouds(){
 
 /* Witch magic sparkle trail */
 function drawContrails(){
-  if(Math.random() < 0.25) {
+  if(Math.random() < 0.25 * frameStep) {
     contrails.push({ 
       x: plane.x + (plane.vx > 0 ? -plane.w*0.3 : plane.w*0.3), 
       y: plane.y + (Math.random()*24 - 12), 
@@ -480,50 +509,123 @@ function drawContrails(){
     ctx.arc(t.x, t.y, t.size, 0, Math.PI*2);
     ctx.fill();
     ctx.restore();
-    t.x -= plane.vx*0.6;
-    t.y += (Math.random() - 0.5) * 0.8 + 0.2;
-    t.alpha -= 0.015;
-    t.size *= 0.96;
+    t.x -= plane.vx*0.6*frameStep;
+    t.y += ((Math.random() - 0.5) * 0.8 + 0.2) * frameStep;
+    t.alpha -= 0.015 * frameStep;
+    t.size *= Math.pow(0.96, frameStep);
     if(t.alpha <= 0.02) contrails.splice(i,1);
   }
 }
 
-/* Draw spiderweb / chute + drop image */
-function drawParachutedImage(drop){
-  if(!drop) return;
-  const parachuteW = 140;
-  const parachuteH = 90;
-  const parachuteX = drop.x - parachuteW/2;
-  const parachuteY = drop.y - (FALL_SIZE/2) - 78;
+/* Rounded-rectangle path helper */
+function roundedRectPath(x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
-  // Render spiderweb PNG image directly without color tinting
+/* Symbol on a white card: keeps the image's proportions and stays visible on the dark sky */
+function drawSymbolCard(img, cx, cy, size){
+  const x = cx - size/2, y = cy - size/2, r = size * 0.12;
+
   ctx.save();
-  ctx.drawImage(parachuteImg, parachuteX, parachuteY, parachuteW, parachuteH);
+  ctx.shadowColor = 'rgba(0,255,102,0.45)';
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = '#ffffff';
+  roundedRectPath(x, y, size, size, r);
+  ctx.fill();
   ctx.restore();
 
-  // Web strings
+  ctx.save();
+  roundedRectPath(x, y, size, size, r);
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = '#ff9900';
+  ctx.stroke();
+  ctx.restore();
+
+  const pad = size * 0.08;
+  const box = size - pad * 2;
+  ctx.save();
+  if(imgReady(img)){
+    const scale = Math.min(box / img.naturalWidth, box / img.naturalHeight);
+    const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(img, cx - w/2, cy - h/2, w, h);
+  } else {
+    // Placeholder if no symbol image is available
+    ctx.font = Math.round(size * 0.5) + 'px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('\uD83C\uDF83', cx, cy);
+  }
+  ctx.restore();
+}
+
+/* The witch sprite (emoji fallback if witch.png is missing) */
+function drawFlyer(cx){
+  if(imgReady(planeImg)){
+    ctx.drawImage(planeImg, cx - plane.w/2, plane.y - plane.h/2, plane.w, plane.h);
+  } else {
+    ctx.font = Math.round(plane.h * 0.6) + 'px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('\uD83E\uDDD9\u200D\u2640\uFE0F', cx, plane.y);
+  }
+}
+
+/* Draw spider / chute + drop image */
+function drawParachutedImage(drop){
+  if(!drop) return;
+  const s = FALL_SIZE / BASE_FALL_SIZE;          // chute scales with the symbol
+  const parachuteW = 140 * s;
+  const parachuteH = 90 * s;
+  const parachuteX = drop.x - parachuteW/2;
+  const parachuteY = drop.y - (FALL_SIZE/2) - 78 * s;
+  const yOffset = drop.bounceOffset || 0;
+
+  // Spider (simple dome if spider.png is missing)
+  ctx.save();
+  if(imgReady(parachuteImg)){
+    ctx.drawImage(parachuteImg, parachuteX, parachuteY, parachuteW, parachuteH);
+  } else {
+    ctx.fillStyle = 'rgba(255,255,255,0.22)';
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(drop.x, parachuteY + parachuteH*0.75, parachuteW/2, parachuteH*0.75, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Web strings to the top corners of the card
   ctx.save();
   ctx.strokeStyle = 'rgba(255,255,255,0.45)';
   ctx.lineWidth = 1.6;
   ctx.beginPath();
   ctx.moveTo(drop.x - parachuteW*0.26, parachuteY + parachuteH*0.52);
-  ctx.lineTo(drop.x - FALL_SIZE*0.22, drop.y - FALL_SIZE*0.28 + (drop.bounceOffset || 0));
+  ctx.lineTo(drop.x - FALL_SIZE*0.38, drop.y - FALL_SIZE/2 + 4 + yOffset);
   ctx.moveTo(drop.x + parachuteW*0.26, parachuteY + parachuteH*0.52);
-  ctx.lineTo(drop.x + FALL_SIZE*0.22, drop.y - FALL_SIZE*0.28 + (drop.bounceOffset || 0));
+  ctx.lineTo(drop.x + FALL_SIZE*0.38, drop.y - FALL_SIZE/2 + 4 + yOffset);
   ctx.stroke();
   ctx.restore();
 
-  // Dropped item
-  ctx.save();
-  ctx.shadowColor = 'rgba(0,255,102,0.4)';
-  ctx.shadowBlur = 12;
-  const yOffset = drop.bounceOffset || 0;
-  ctx.drawImage(drop.img, drop.x - FALL_SIZE/2, drop.y - FALL_SIZE/2 + yOffset, FALL_SIZE, FALL_SIZE);
-  ctx.restore();
+  // Dropped symbol
+  drawSymbolCard(drop.img, drop.x, drop.y + yOffset, FALL_SIZE);
 }
 
 /* -------- Main animation loop -------- */
-function updateAndDraw(){
+function updateAndDraw(now){
+  requestAnimationFrame(updateAndDraw);   // schedule first so one bad frame can't stop the game
+  if(typeof now !== 'number') now = performance.now();
+  frameStep = (lastFrameTime === null) ? 1 : Math.min(Math.max((now - lastFrameTime) / 16.667, 0), 3);
+  lastFrameTime = now;
+
   ctx.clearRect(0,0,canvas.width,canvas.height);
 
   // Spooky Moon
@@ -537,14 +639,15 @@ function updateAndDraw(){
   drawContrails();
 
   // Flying witch movement
-  plane.x += plane.vx;
-  if(plane.x > canvas.width - 160 || plane.x < 160) plane.vx *= -1;
+  plane.x += plane.vx * frameStep;
+  if(plane.x > canvas.width - 160 && plane.vx > 0) plane.vx *= -1;
+  else if(plane.x < 160 && plane.vx < 0) plane.vx *= -1;
 
   // Active Drop handling
   if(activeDrop){
     if(!activeDrop.stop){
-      activeDrop.y += activeDrop.speed;
-      activeDrop.x += Math.sin(activeDrop.y * 0.02) * 0.35;
+      activeDrop.y += activeDrop.speed * frameStep;
+      activeDrop.x += Math.sin(activeDrop.y * 0.02) * 0.35 * frameStep;
       const grassTop = canvas.height - 90 - (FALL_SIZE/2) + 6;
       if(activeDrop.y >= grassTop){
         activeDrop.y = grassTop;
@@ -555,7 +658,7 @@ function updateAndDraw(){
       }
     } else if(activeDrop.bounce){
       const b = activeDrop.bounce;
-      b.t++;
+      b.t += frameStep;
       const progress = b.t / b.duration;
       const damping = Math.exp(-4 * progress);
       const angle = Math.sin(progress * Math.PI * 2);
@@ -575,9 +678,9 @@ function updateAndDraw(){
   ctx.shadowBlur = 12;
   if(plane.vx > 0){
     ctx.scale(-1,1);
-    ctx.drawImage(planeImg, -plane.x - plane.w/2, plane.y - plane.h/2, plane.w, plane.h);
+    drawFlyer(-plane.x);
   } else {
-    ctx.drawImage(planeImg, plane.x - plane.w/2, plane.y - plane.h/2, plane.w, plane.h);
+    drawFlyer(plane.x);
   }
   ctx.restore();
 
@@ -587,7 +690,6 @@ function updateAndDraw(){
   // Magic fireworks
   drawFireworks();
 
-  requestAnimationFrame(updateAndDraw);
 }
 
 /* -------- Score logic -------- */
@@ -595,8 +697,28 @@ function updateScoreUI(){ p1scoreSpan.textContent = score1; p2scoreSpan.textCont
 
 function pulseElement(el){ el.classList.remove('pulse'); void el.offsetWidth; el.classList.add('pulse'); }
 
+function freezeDropForCelebration(){
+  // The claimed symbol stops falling and does a happy hop
+  activeDrop.stop = true;
+  if(!activeDrop.bounce) activeDrop.bounce = { t:0, duration:28, amplitude:18 };
+}
+
+let toastTimer = null;
+function showRoundToast(text, color){
+  roundToast.textContent = text;
+  roundToast.style.background = `linear-gradient(120deg, #1f0833, ${color})`;
+  roundToast.style.boxShadow = `0 0 24px ${hexToRgba(color,0.8)}`;
+  roundToast.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>{ roundToast.style.display = 'none'; }, 2200);
+}
+function hideRoundToast(){ clearTimeout(toastTimer); roundToast.style.display = 'none'; }
+
 function clampAndAddScore(player){
-  if(gameOver) return;
+  // Only the first tap on each drop counts; later taps are ignored until the next drop
+  if(gameOver || !roundOpen || !activeDrop) return;
+  roundOpen = false;
+  freezeDropForCelebration();
   if(player === 1){
     if(score1 < 100) score1 = Math.min(100, score1 + 10);
     updateScoreUI();
@@ -611,6 +733,7 @@ function clampAndAddScore(player){
     setTimeout(()=> p2Box.style.boxShadow = '0 0 15px rgba(0,255,102,0.4)', 520);
   }
   playSound(clickAudio, 0.3);
+  showRoundToast(`${player === 1 ? playerName1 : playerName2} found it! \uD83C\uDF83`, player === 1 ? PLAYER1_COLOR : PLAYER2_COLOR);
 
   if(score1 >= 100 || score2 >= 100){
     gameOver = true;
@@ -635,35 +758,35 @@ function startRoundUnderPlane(resetScores = false){
   if(resetScores){
     score1 = 0; score2 = 0; updateScoreUI();
   }
-  const pool = getActiveDropPool();
-  if(pool.length === 0){
-    pool.push(...defaultDropImgs);
-  }
-  const idx = Math.floor(Math.random() * pool.length);
+  const pool = getActiveDropPool();   // only images that actually loaded
+  const img = pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;  // null -> pumpkin placeholder
   activeDrop = {
-    img: pool[idx],
+    img,
     x: plane.x,
-    y: plane.y + plane.h/3,
-    speed: 0.9 + Math.random()*0.6,
+    y: plane.y + plane.h/3 + 1.1 * (FALL_SIZE - BASE_FALL_SIZE),
+    speed: (0.9 + Math.random()*0.6) * FALL_SPEED_SCALE,
     stop: false,
     bounceOffset: 0,
     bounce: null
   };
   isRunning = true;
   gameOver = false;
+  roundOpen = true;   // first tap on a score box claims this drop
   winnerBanner.style.display = 'none';
+  hideRoundToast();
   fireworksParticles.length = 0;
   nextBtn.style.display = 'none';
   playSound(dropAudio, 0.6);
 }
 
 /* -------- UI binding -------- */
-p1Box.addEventListener('click', ()=> clampAndAddScore(1));
-p2Box.addEventListener('click', ()=> clampAndAddScore(2));
+p1Box.addEventListener('pointerdown', (e)=>{ e.preventDefault(); clampAndAddScore(1); });
+p2Box.addEventListener('pointerdown', (e)=>{ e.preventDefault(); clampAndAddScore(2); });
 
 nextBtn.addEventListener('click', ()=> startRoundUnderPlane(false));
 
 function showWinnerBanner(text, color){
+  hideRoundToast();
   winnerBanner.style.display = 'block';
   winnerBanner.textContent = `🎃 ${text} 👻`;
   winnerBanner.style.background = `linear-gradient(120deg, #1f0833, ${color})`;
